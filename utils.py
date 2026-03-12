@@ -52,7 +52,7 @@ def is_valid_episode_data(raw_ep_num, raw_title, raw_air_date):
     return False
 
 
-def compute_dedup_key(series_norm, season, episode_num, title_norm, air_date):
+def compute_dedup_key(series_norm, season, episode_num, title_norm, air_date):  # what's the best key possible?
     if season != 0 and episode_num != 0:
         return (series_norm, season, episode_num)
     if season == 0 and episode_num != 0:
@@ -61,7 +61,7 @@ def compute_dedup_key(series_norm, season, episode_num, title_norm, air_date):
         return (series_norm, season, 0, title_norm)
     if title_norm != "untitled episode":
         return (series_norm, 0, 0, title_norm)
-    return (series_norm, 0, 0, "air:" + air_date)
+    return (series_norm, 0, 0, "air:" + air_date)  # the least amount of info
 
 
 def is_better_record(new_rec, existing_rec):
