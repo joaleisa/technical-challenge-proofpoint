@@ -1,4 +1,7 @@
 import unittest
+import csv
+import os
+import tempfile
 
 from utils import (
     normalize_string,
@@ -8,7 +11,7 @@ from utils import (
     compute_dedup_key,
     is_better_record,
 )
-from main import process_row
+from main import process_row, build_catalog
 
 
 class TestNormalizeString(unittest.TestCase):
@@ -145,12 +148,12 @@ class TestComputeDedupKey(unittest.TestCase):
         self.assertEqual(key, ("breakingbad", 0, 0, "sometitle"))
 
     def test_neither_with_untitled_uses_air_date(self):
-        key = compute_dedup_key("breakingbad", 0, 0, "untitledepisode", "2022-01-01")
+        key = compute_dedup_key("breakingbad", 0, 0, "untitled episode", "2022-01-01")
         self.assertEqual(key, ("breakingbad", 0, 0, "air:2022-01-01"))
 
 
 class TestIsBetterRecord(unittest.TestCase):
-    def _rec(self, air_date="Unknown", title="untitledepisode", season=0, episode=0):
+    def _rec(self, air_date="Unknown", title="untitled episode", season=0, episode=0):
         return {
             "air_date": air_date,
             "episode_title": title,
@@ -170,11 +173,11 @@ class TestIsBetterRecord(unittest.TestCase):
 
     def test_new_wins_on_title(self):
         new = self._rec(title="pilot")
-        old = self._rec(title="untitledepisode")
+        old = self._rec(title="untitled episode")
         self.assertTrue(is_better_record(new, old))
 
     def test_old_wins_on_title(self):
-        new = self._rec(title="untitledepisode")
+        new = self._rec(title="untitled episode")
         old = self._rec(title="pilot")
         self.assertFalse(is_better_record(new, old))
 
@@ -231,18 +234,18 @@ class TestProcessRow(unittest.TestCase):
         self.assertEqual(record["air_date"], "Unknown")
         self.assertEqual(corrections, 4)  # series, season, title, air_date
 
-    def test_missing_title_becomes_untitledepisode(self):
+    def test_missing_title_becomes_untitled_episode(self):
         result = process_row(["breakingbad", "1", "2", "", "2022-01-15"])
         self.assertIsNotNone(result)
         record, corrections = result
-        self.assertEqual(record["episode_title"], "untitledepisode")
+        self.assertEqual(record["episode_title"], "untitled episode")
         self.assertEqual(corrections, 1)  # title corrected
 
     def test_fewer_than_5_fields_padded(self):
         result = process_row(["breakingbad", "1", "2"])
         self.assertIsNotNone(result)
         record, _ = result
-        self.assertEqual(record["episode_title"], "untitledepisode")
+        self.assertEqual(record["episode_title"], "untitled episode")
         self.assertEqual(record["air_date"], "Unknown")
 
     def test_zero_season_not_counted_as_correction(self):
@@ -250,6 +253,87 @@ class TestProcessRow(unittest.TestCase):
         self.assertIsNotNone(result)
         _, corrections = result
         self.assertEqual(corrections, 0)
+
+
+def _write_csv(rows):
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline="", encoding="utf-8")
+    csv.writer(f).writerows(rows)
+    f.close()
+    return f.name
+
+
+class TestBuildCatalogSecondaryIndex(unittest.TestCase):
+    def tearDown(self):
+        if hasattr(self, "_csv") and os.path.exists(self._csv):
+            os.unlink(self._csv)
+
+    def _build(self, rows):
+        self._csv = _write_csv(rows)
+        catalog, metrics = build_catalog(self._csv)
+        return catalog, metrics
+
+    def test_primary_key_dupe_detected(self):
+        # Same series/season/episode → primary key collision
+        catalog, metrics = self._build([
+            ["Game of Thrones", "6", "9", "", ""],
+            ["Game of Thrones", "6", "9", "Battle of the Bastards", "2016-06-19"],
+        ])
+        self.assertEqual(len(catalog), 1)
+        self.assertEqual(metrics["duplicates_detected"], 1)
+        record = list(catalog.values())[0]
+        self.assertEqual(record["episode_title"], "battle of the bastards")
+        self.assertEqual(record["air_date"], "2016-06-19")
+
+    def test_secondary_index_dupe_detected(self):
+        # Row 1 has episode number, Row 2 does not — same series/season/title
+        catalog, metrics = self._build([
+            ["Game of Thrones", "6", "9", "Battle of the Bastards", "2016-06-19"],
+            ["Game of Thrones", "6", "0", "Battle of the Bastards", ""],
+        ])
+        self.assertEqual(len(catalog), 1)
+        self.assertEqual(metrics["duplicates_detected"], 1)
+        record = list(catalog.values())[0]
+        self.assertEqual(record["episode_number"], 9)  # row 1 wins: has episode number
+
+    def test_secondary_index_reverse_order(self):
+        # Row with missing episode comes first, complete row comes second
+        catalog, metrics = self._build([
+            ["Game of Thrones", "6", "0", "Battle of the Bastards", ""],
+            ["Game of Thrones", "6", "9", "Battle of the Bastards", "2016-06-19"],
+        ])
+        self.assertEqual(len(catalog), 1)
+        self.assertEqual(metrics["duplicates_detected"], 1)
+        record = list(catalog.values())[0]
+        self.assertEqual(record["episode_number"], 9)  # row 2 wins: has episode number
+
+    def test_different_titles_same_season_not_dupes(self):
+        # Same series/season but different titles → two separate entries
+        catalog, metrics = self._build([
+            ["Game of Thrones", "6", "0", "Battle of the Bastards", ""],
+            ["Game of Thrones", "6", "0", "The Winds of Winter", ""],
+        ])
+        self.assertEqual(len(catalog), 2)
+        self.assertEqual(metrics["duplicates_detected"], 0)
+
+    def test_secondary_index_not_used_when_season_missing(self):
+        # Season is 0 → secondary index not consulted, two separate entries
+        catalog, metrics = self._build([
+            ["Game of Thrones", "6", "10", "The Winds of Winter", "2016-06-26"],
+            ["Game of Thrones", "", "0", "The Winds of Winter", ""],
+        ])
+        self.assertEqual(len(catalog), 2)
+        self.assertEqual(metrics["duplicates_detected"], 0)
+
+    def test_secondary_index_not_used_for_untitled(self):
+        # Untitled rows with same season are not merged via title index
+        # Row 2 has a valid date so it survives Step 2, but title is "untitled episode"
+        # so the secondary index is never consulted
+        catalog, metrics = self._build([
+            ["Game of Thrones", "6", "9", "", "2016-06-19"],
+            ["Game of Thrones", "6", "0", "", "2016-06-19"],
+        ])
+        self.assertEqual(len(catalog), 2)
+        self.assertEqual(metrics["duplicates_detected"], 0)
 
 
 if __name__ == "__main__":
