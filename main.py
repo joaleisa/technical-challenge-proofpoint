@@ -59,7 +59,7 @@ def process_row(raw_fields):
 
     title_norm = normalize_string(raw_title)
     if not title_norm:
-        episode_title = "untitledepisode"
+        episode_title = "untitled episode"
     else:
         episode_title = title_norm
     if episode_title != raw_title:
@@ -148,7 +148,7 @@ def write_report(metrics, output_dir):
         "two numbers is zero (unknown), the episode title is added to the key to improve precision.\n"
         "When both numbers are zero, the episode title is used if it is known; otherwise the air date\n"
         "is used as a last resort. Among duplicate records, the one with the most complete information\n"
-        "is kept: a known air date is preferred over \"Unknown\", a real title over \"untitledepisode\",\n"
+        "is kept: a known air date is preferred over \"Unknown\", a real title over \"untitled episode\",\n"
         "and a record with both a valid season and episode number over one missing either. When all\n"
         "else is equal, the first record encountered in the file is kept."
     )
@@ -180,8 +180,8 @@ def main():
 
     print(f"Processing: {os.path.basename(csv_path)}")
 
-    catalog, metrics = build_catalog(csv_path)
-    metrics["total_output"] = len(catalog)
+    catalog, metrics = build_catalog(csv_path)  # most important logic
+    metrics["total_output"] = len(catalog)  # it adds the final metric to metrics
 
     write_clean_csv(catalog, output_dir)
     write_report(metrics, output_dir)

@@ -59,7 +59,7 @@ def compute_dedup_key(series_norm, season, episode_num, title_norm, air_date):
         return (series_norm, 0, episode_num, title_norm)
     if season != 0 and episode_num == 0:
         return (series_norm, season, 0, title_norm)
-    if title_norm != "untitledepisode":
+    if title_norm != "untitled episode":
         return (series_norm, 0, 0, title_norm)
     return (series_norm, 0, 0, "air:" + air_date)
 
@@ -72,8 +72,8 @@ def is_better_record(new_rec, existing_rec):
     if not new_has_date and old_has_date:
         return False
 
-    new_has_title = new_rec["episode_title"] != "untitledepisode"
-    old_has_title = existing_rec["episode_title"] != "untitledepisode"
+    new_has_title = new_rec["episode_title"] != "untitled episode"
+    old_has_title = existing_rec["episode_title"] != "untitled episode"
     if new_has_title and not old_has_title:
         return True
     if not new_has_title and old_has_title:
