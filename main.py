@@ -80,8 +80,25 @@ def process_row(raw_fields):
     return (record, corrections)
 
 
+def _replace_record(catalog, title_index, key, new_record):
+    old_record = catalog[key]
+    old_title = old_record["episode_title"]
+    new_title = new_record["episode_title"]
+    series = new_record["series_name"]
+    season = new_record["season_number"]
+
+    catalog[key] = new_record
+
+    if season != 0:
+        if old_title != "untitled episode":
+            title_index.pop((series, season, old_title), None)
+        if new_title != "untitled episode":
+            title_index[(series, season, new_title)] = key
+
+
 def build_catalog(csv_path):
     catalog = {}
+    title_index = {}  # (series_norm, season_number, title_norm) → key in catalog
     metrics = {
         "total_input": 0,
         "discarded": 0,
@@ -110,12 +127,24 @@ def build_catalog(csv_path):
                 record["air_date"],
             )
 
-            if key not in catalog:
-                catalog[key] = record
-            else:
+            if key in catalog:
                 metrics["duplicates_detected"] += 1
                 if is_better_record(record, catalog[key]):
+                    _replace_record(catalog, title_index, key, record)
+            else:
+                season = record["season_number"]
+                title = record["episode_title"]
+                title_key = (record["series_name"], season, title)
+
+                if season != 0 and title != "untitled episode" and title_key in title_index:
+                    existing_key = title_index[title_key]
+                    metrics["duplicates_detected"] += 1
+                    if is_better_record(record, catalog[existing_key]):
+                        _replace_record(catalog, title_index, existing_key, record)
+                else:
                     catalog[key] = record
+                    if season != 0 and title != "untitled episode":
+                        title_index[title_key] = key
 
     return catalog, metrics
 
@@ -147,10 +176,15 @@ def write_report(metrics, output_dir):
         "is determined solely by those two numbers together with the series name. When one of the\n"
         "two numbers is zero (unknown), the episode title is added to the key to improve precision.\n"
         "When both numbers are zero, the episode title is used if it is known; otherwise the air date\n"
-        "is used as a last resort. Among duplicate records, the one with the most complete information\n"
-        "is kept: a known air date is preferred over \"Unknown\", a real title over \"untitled episode\",\n"
-        "and a record with both a valid season and episode number over one missing either. When all\n"
-        "else is equal, the first record encountered in the file is kept."
+        "is used as a last resort.\n"
+        "A secondary title index is also maintained: when the season is known and the episode title\n"
+        "is real, the combination (series, season, title) is indexed regardless of episode number.\n"
+        "This allows detecting duplicates across rows that differ only in episode number completeness\n"
+        "(e.g. one row has the number, another does not), under the assumption that episode titles\n"
+        "are unique within a season. Among duplicate records, the one with the most complete\n"
+        "information is kept: a known air date is preferred over \"Unknown\", a real title over\n"
+        "\"untitled episode\", and a record with both a valid season and episode number over one\n"
+        "missing either. When all else is equal, the first record encountered in the file is kept."
     )
 
     output_path = os.path.join(output_dir, "report.md")
